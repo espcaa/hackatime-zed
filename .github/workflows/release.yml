@@ -48,7 +48,7 @@ jobs:
       - name: Build
         run: |
           cd hackatime-lsp
-          go build -o hackatime-ls${{ matrix.goos == 'windows' && '.exe' || '' }} .
+          go build -ldflags="-s -w" -o hackatime-ls${{ matrix.goos == 'windows' && '.exe' || '' }} .
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}

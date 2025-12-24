@@ -1,0 +1,244 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tliron/glsp"
+	protocol "github.com/tliron/glsp/protocol_3_16"
+	"github.com/tliron/glsp/server"
+)
+
+const (
+	eventDebounceMs = 50
+	batchSendMs     = 120 * 1000
+	maxQueueSize    = 100
+	cliTimeoutSecs  = 10
+)
+
+var (
+	projectRoot     string
+	projectFolder   string
+	wakatimeCliPath string
+	heartbeatQueue  []Heartbeat
+	queueMutex      sync.Mutex
+	lastEventTime   map[string]time.Time
+	eventMutex      sync.Mutex
+	batchSendTimer  *time.Timer
+	lastSentTime    time.Time
+	metricsEnabled  bool
+)
+
+var (
+	lastCursorPos map[string]int
+	cursorMutex   sync.Mutex
+)
+
+func saveCursorPosition(uri string, line, pos int) {
+	cursorMutex.Lock()
+	defer cursorMutex.Unlock()
+
+	if lastCursorPos == nil {
+		lastCursorPos = make(map[string]int)
+	}
+	lastCursorPos[uri] = pos
+}
+
+func getCursorPosition(uri string) int {
+	cursorMutex.Lock()
+	defer cursorMutex.Unlock()
+
+	if pos, exists := lastCursorPos[uri]; exists {
+		return pos
+	}
+	return 0
+}
+
+func sendHeartbeat(hb Heartbeat) error {
+	cliPath := wakatimeCliPath
+	if cliPath == "" {
+		return errors.New("wakatime-cli path not provided")
+	}
+
+	args := buildHeartbeatArgs(hb)
+
+	ctx, cancel := context.WithTimeout(context.Background(), cliTimeoutSecs*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, cliPath, args...)
+	return cmd.Run()
+}
+
+func queueHeartbeat(hb Heartbeat) {
+	queueMutex.Lock()
+	defer queueMutex.Unlock()
+
+	if hb.AlternateProject == "" && projectRoot != "" {
+		hb.AlternateProject = filepath.Base(projectRoot)
+	}
+	if hb.ProjectFolder == "" && projectFolder != "" {
+		hb.ProjectFolder = projectFolder
+	}
+
+	heartbeatQueue = append(heartbeatQueue, hb)
+
+	if len(heartbeatQueue) >= maxQueueSize {
+		go flushHeartbeats()
+	} else if len(heartbeatQueue) == 1 {
+		scheduleBatchSend()
+	}
+}
+
+func scheduleBatchSend() {
+	if batchSendTimer != nil {
+		return
+	}
+
+	batchSendTimer = time.AfterFunc(time.Duration(batchSendMs)*time.Millisecond, func() {
+		batchSendTimer = nil
+		flushHeartbeats()
+	})
+}
+
+func flushHeartbeats() {
+	queueMutex.Lock()
+	defer queueMutex.Unlock()
+
+	if len(heartbeatQueue) == 0 {
+		return
+	}
+
+	hb := heartbeatQueue[0]
+	heartbeatQueue = heartbeatQueue[1:]
+
+	go sendHeartbeat(hb)
+	lastSentTime = time.Now()
+
+	if len(heartbeatQueue) > 0 {
+		scheduleBatchSend()
+	}
+}
+
+func throttledHeartbeat(hb Heartbeat) {
+	eventMutex.Lock()
+	defer eventMutex.Unlock()
+
+	if lastEventTime == nil {
+		lastEventTime = make(map[string]time.Time)
+	}
+
+	now := time.Now()
+	lastTime, exists := lastEventTime[hb.Entity]
+
+	if hb.IsWrite {
+		lastEventTime[hb.Entity] = now
+		go queueHeartbeat(hb)
+	} else if !exists || now.Sub(lastTime) >= time.Duration(eventDebounceMs)*time.Millisecond {
+		lastEventTime[hb.Entity] = now
+		go queueHeartbeat(hb)
+	}
+}
+
+func main() {
+	flag.StringVar(&wakatimeCliPath, "wakatime-cli", "", "Path to wakatime-cli binary")
+	flag.Parse()
+
+	handler := protocol.Handler{
+		Initialize: func(ctx *glsp.Context, params *protocol.InitializeParams) (any, error) {
+			if params.RootURI != nil {
+				projectRoot = filepath.Clean(strings.TrimPrefix(*params.RootURI, "file://"))
+				projectFolder = projectRoot
+			} else if params.RootPath != nil {
+				projectRoot = filepath.Clean(*params.RootPath)
+				projectFolder = projectRoot
+			}
+
+			capabilities := protocol.ServerCapabilities{
+				TextDocumentSync: protocol.TextDocumentSyncKindIncremental,
+			}
+			return protocol.InitializeResult{Capabilities: capabilities}, nil
+		},
+
+		TextDocumentDidChange: func(ctx *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
+			uri := strings.TrimPrefix(params.TextDocument.URI, "file://")
+
+			lines := 1
+			lineNumber := 1
+			cursorPos := 0
+
+			if len(params.ContentChanges) > 0 {
+				if fullDoc, ok := params.ContentChanges[0].(map[string]any); ok {
+					if text, ok := fullDoc["text"].(string); ok {
+						lines = len(strings.Split(text, "\n"))
+					}
+
+					if rangeObj, ok := fullDoc["range"].(map[string]any); ok {
+						if startObj, ok := rangeObj["start"].(map[string]any); ok {
+							if line, ok := startObj["line"].(float64); ok {
+								lineNumber = int(line) + 1
+							}
+							if character, ok := startObj["character"].(float64); ok {
+								cursorPos = int(character)
+							}
+						}
+					}
+				}
+			}
+
+			saveCursorPosition(uri, lineNumber, cursorPos)
+
+			throttledHeartbeat(Heartbeat{
+				Entity:     uri,
+				EntityType: "file",
+				Category:   "coding",
+				Plugin:     buildPluginString(),
+				Time:       float64(time.Now().UnixMilli()) / 1000.0,
+				LineNumber: lineNumber,
+				CursorPos:  cursorPos,
+				Lines:      lines,
+			})
+			return nil
+		},
+
+		TextDocumentDidSave: func(ctx *glsp.Context, params *protocol.DidSaveTextDocumentParams) error {
+			uri := strings.TrimPrefix(params.TextDocument.URI, "file://")
+
+			lines := 1
+			if params.Text != nil {
+				lines = len(strings.Split(*params.Text, "\n"))
+			}
+
+			throttledHeartbeat(Heartbeat{
+				Entity:     uri,
+				EntityType: "file",
+				Category:   "coding",
+				Plugin:     buildPluginString(),
+				Time:       float64(time.Now().UnixMilli()) / 1000.0,
+				LineNumber: 1,
+				Lines:      lines,
+				CursorPos:  getCursorPosition(uri),
+				IsWrite:    true,
+			})
+			return nil
+		},
+	}
+
+	s := server.NewServer(&handler, "hackatime-lsp", false)
+	s.RunStdio()
+}
+
+func buildPluginString() string {
+	version := os.Getenv("PLUGIN_VERSION")
+	if version == "" {
+		version = "unknown"
+	}
+	return fmt.Sprintf("hackatime-zed-%s", version)
+}

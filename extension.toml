@@ -1,0 +1,7 @@
+id = "hackatime-zed"
+name = "HackaTime for Zed"
+version = "0.0.1"
+schema_version = 1
+authors = ["Alice <alice@hackclub.cc>"]
+description = "Hackatime support for Zed!"
+repository = "https://github.com/espcaa/hackatime-zed"

@@ -1,0 +1,98 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            goos: windows
+            goarch: arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.22"
+      - name: Build
+        run: |
+          cd hackatime-lsp
+          go build -o hackatime-ls${{ matrix.goos == 'windows' && '.exe' || '' }} .
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+      - name: Create artifact directory
+        run: |
+          mkdir -p artifacts/hackatime-ls-${{ matrix.target }}
+          cp hackatime-lsp/hackatime-ls${{ matrix.goos == 'windows' && '.exe' || '' }} artifacts/hackatime-ls-${{ matrix.target }}/
+      - name: Create zip
+        shell: bash
+        run: |
+          cd artifacts
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            powershell -Command "Compress-Archive -Path hackatime-ls-${{ matrix.target }} -DestinationPath hackatime-ls-${{ matrix.target }}.zip"
+          else
+            zip -r hackatime-ls-${{ matrix.target }}.zip hackatime-ls-${{ matrix.target }}
+          fi
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: artifacts/hackatime-ls-${{ matrix.target }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p final-artifacts
+          find release-artifacts -name "*.zip" -exec cp {} final-artifacts/ \;
+      - name: Create release
+        run: |
+          PRERELEASE=""
+          if [[ "${{ github.ref_name }}" == *"pre"* || "${{ github.ref_name }}" == *"alpha"* || "${{ github.ref_name }}" == *"beta"* ]]; then
+            PRERELEASE="--prerelease"
+          fi
+
+          gh release create "${{ github.ref_name }}" $PRERELEASE --title "Release ${{ github.ref_name }}" final-artifacts/*.zip

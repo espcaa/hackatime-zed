@@ -5,9 +5,8 @@ use std::{
 
 use zed_extension_api::{self as zed, Command, LanguageServerId, Result, Worktree};
 
-struct WakatimeExtension {
+struct HackatimeExtension {
     cached_ls_binary_path: Option<PathBuf>,
-    cached_wakatime_cli_binary_path: Option<PathBuf>,
 }
 
 fn is_absolute_path_wasm(path: &PathBuf) -> bool {
@@ -17,7 +16,6 @@ fn is_absolute_path_wasm(path: &PathBuf) -> bool {
 
     match zed::current_platform().0 {
         zed::Os::Windows => {
-            // Windows: Check if the path is an absolute path (e.g., C:\ or C:/)
             let bytes = path_str.as_bytes();
             if bytes.len() >= 3 {
                 if bytes[0].is_ascii_alphabetic()
@@ -27,20 +25,9 @@ fn is_absolute_path_wasm(path: &PathBuf) -> bool {
                     return true;
                 }
             }
-            // Windows：Check if it is a UNC path (e.g., \\server\share)
             path_str.starts_with(r"\\")
         }
-        _ => {
-            // Mac/Linux: check if it is an absolute path (e.g., /usr)
-            path_str.starts_with('/')
-        }
-    }
-}
-
-fn sanitize_path(path: &str) -> String {
-    match zed::current_platform() {
-        (zed::Os::Windows, _) => path.trim_start_matches("/").to_string(),
-        _ => path.to_string(),
+        _ => path_str.starts_with('/'),
     }
 }
 
@@ -51,35 +38,27 @@ fn executable_name(binary: &str) -> String {
     }
 }
 
-impl WakatimeExtension {
+impl HackatimeExtension {
     fn target_triple(&self, binary: &str) -> Result<String, String> {
         let (platform, arch) = zed::current_platform();
         let (arch, os) = {
             let arch = match arch {
-                zed::Architecture::Aarch64 if binary == "wakatime-cli" => "arm64",
-                zed::Architecture::Aarch64 if binary == "wakatime-ls" => "aarch64",
-                zed::Architecture::X8664 if binary == "wakatime-cli" => "amd64",
-                zed::Architecture::X8664 if binary == "wakatime-ls" => "x86_64",
+                zed::Architecture::Aarch64 => "aarch64",
+                zed::Architecture::X8664 => "x86_64",
                 _ => return Err(format!("unsupported architecture: {arch:?}")),
             };
 
             let os = match platform {
-                zed::Os::Mac if binary == "wakatime-cli" => "darwin",
-                zed::Os::Mac if binary == "wakatime-ls" => "apple-darwin",
-                zed::Os::Linux if binary == "wakatime-cli" => "linux",
-                zed::Os::Linux if binary == "wakatime-ls" => "unknown-linux-gnu",
-                zed::Os::Windows if binary == "wakatime-cli" => "windows",
-                zed::Os::Windows if binary == "wakatime-ls" => "pc-windows-msvc",
+                zed::Os::Mac => "apple-darwin",
+                zed::Os::Linux => "unknown-linux-gnu",
+                zed::Os::Windows => "pc-windows-msvc",
                 _ => return Err("unsupported platform".to_string()),
             };
 
             (arch, os)
         };
 
-        Ok(match binary {
-            "wakatime-cli" => format!("{binary}-{os}-{arch}"),
-            _ => format!("{binary}-{arch}-{os}"),
-        })
+        Ok(format!("{binary}-{arch}-{os}"))
     }
 
     fn download(
@@ -106,11 +85,7 @@ impl WakatimeExtension {
             .ok_or_else(|| format!("no asset found matching {asset_name:?}"))?;
 
         let version_dir = format!("{binary}-{}", release.version);
-        let binary_path = if binary == "wakatime-cli" {
-            Path::new(&version_dir).join(executable_name(&target_triple))
-        } else {
-            Path::new(&version_dir).join(executable_name(binary))
-        };
+        let binary_path = Path::new(&version_dir).join(executable_name(binary));
 
         if !fs::metadata(&binary_path).is_ok_and(|stat| stat.is_file()) {
             zed::set_language_server_installation_status(
@@ -153,11 +128,11 @@ impl WakatimeExtension {
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,
         );
 
-        if let Some(path) = worktree.which(&executable_name("wakatime-ls")) {
+        if let Some(path) = worktree.which(&executable_name("hackatime-ls")) {
             return Ok(path.into());
         }
 
-        let target_triple = self.target_triple("wakatime-ls")?;
+        let target_triple = self.target_triple("hackatime-ls")?;
         if let Some(path) = worktree.which(&executable_name(&target_triple)) {
             return Ok(path.into());
         }
@@ -169,47 +144,18 @@ impl WakatimeExtension {
         }
 
         let binary_path =
-            self.download(language_server_id, "wakatime-ls", "wakatime/zed-wakatime")?;
+            self.download(language_server_id, "hackatime-ls", "espcaa/hackatime-zed")?;
 
         self.cached_ls_binary_path = Some(binary_path.clone());
 
         Ok(binary_path)
     }
-
-    fn wakatime_cli_binary_path(
-        &mut self,
-        language_server_id: &LanguageServerId,
-        worktree: &Worktree,
-    ) -> Result<PathBuf, String> {
-        zed::set_language_server_installation_status(
-            language_server_id,
-            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
-        );
-
-        if let Some(path) = worktree.which(&executable_name("wakatime-cli")) {
-            return Ok(path.into());
-        }
-
-        if let Some(path) = &self.cached_wakatime_cli_binary_path {
-            if fs::metadata(path).is_ok_and(|stat| stat.is_file()) {
-                return Ok(path.into());
-            }
-        }
-
-        let binary_path =
-            self.download(language_server_id, "wakatime-cli", "wakatime/wakatime-cli")?;
-
-        self.cached_wakatime_cli_binary_path = Some(binary_path.clone());
-
-        Ok(binary_path)
-    }
 }
 
-impl zed::Extension for WakatimeExtension {
+impl zed::Extension for HackatimeExtension {
     fn new() -> Self {
         Self {
             cached_ls_binary_path: None,
-            cached_wakatime_cli_binary_path: None,
         }
     }
 
@@ -218,32 +164,14 @@ impl zed::Extension for WakatimeExtension {
         language_server_id: &LanguageServerId,
         worktree: &Worktree,
     ) -> Result<Command> {
-        let wakatime_cli_binary_path =
-            self.wakatime_cli_binary_path(language_server_id, worktree)?;
-
         let ls_binary_path = self.language_server_binary_path(language_server_id, worktree)?;
 
-        let args = vec!["--wakatime-cli".to_string(), {
-            use std::env;
-            let current = env::current_dir().unwrap();
-            let waka_cli = if is_absolute_path_wasm(&wakatime_cli_binary_path) {
-                wakatime_cli_binary_path.to_string_lossy().to_string()
-            } else {
-                current
-                    .join(wakatime_cli_binary_path)
-                    .to_str()
-                    .unwrap()
-                    .to_string()
-            };
-            sanitize_path(waka_cli.as_str())
-        }];
-
         Ok(Command {
-            args,
+            args: vec![],
             command: ls_binary_path.to_str().unwrap().to_owned(),
             env: worktree.shell_env(),
         })
     }
 }
 
-zed::register_extension!(WakatimeExtension);
+zed::register_extension!(HackatimeExtension);

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -40,6 +41,7 @@ var (
 var (
 	lastCursorPos map[string]int
 	cursorMutex   sync.Mutex
+	logMutex      sync.Mutex
 )
 
 func saveCursorPosition(uri string, line, pos int) {
@@ -60,6 +62,28 @@ func getCursorPosition(uri string) int {
 		return pos
 	}
 	return 0
+}
+
+func logEvent(eventType string, hb Heartbeat) {
+	logMutex.Lock()
+	defer logMutex.Unlock()
+
+	logPath := filepath.Join(os.Getenv("HOME"), "hackatime-zed.log")
+	
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	logEntry := map[string]interface{}{
+		"timestamp": time.Now().Format(time.RFC3339),
+		"event":     eventType,
+		"heartbeat": hb,
+	}
+
+	data, _ := json.Marshal(logEntry)
+	fmt.Fprintf(file, "%s\n", string(data))
 }
 
 func sendHeartbeat(hb Heartbeat) error {
@@ -195,7 +219,7 @@ func main() {
 
 			saveCursorPosition(uri, lineNumber, cursorPos)
 
-			throttledHeartbeat(Heartbeat{
+			hb := Heartbeat{
 				Entity:     uri,
 				EntityType: "file",
 				Category:   "coding",
@@ -204,7 +228,10 @@ func main() {
 				LineNumber: lineNumber,
 				CursorPos:  cursorPos,
 				Lines:      lines,
-			})
+			}
+
+			logEvent("TextDocumentDidChange", hb)
+			throttledHeartbeat(hb)
 			return nil
 		},
 
@@ -216,7 +243,7 @@ func main() {
 				lines = len(strings.Split(*params.Text, "\n"))
 			}
 
-			throttledHeartbeat(Heartbeat{
+			hb := Heartbeat{
 				Entity:     uri,
 				EntityType: "file",
 				Category:   "coding",
@@ -226,7 +253,10 @@ func main() {
 				Lines:      lines,
 				CursorPos:  getCursorPosition(uri),
 				IsWrite:    true,
-			})
+			}
+
+			logEvent("TextDocumentDidSave", hb)
+			throttledHeartbeat(hb)
 			return nil
 		},
 	}

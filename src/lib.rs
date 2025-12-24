@@ -9,28 +9,6 @@ struct HackatimeExtension {
     cached_ls_binary_path: Option<PathBuf>,
 }
 
-fn is_absolute_path_wasm(path: &PathBuf) -> bool {
-    let Some(path_str) = path.to_str() else {
-        return false;
-    };
-
-    match zed::current_platform().0 {
-        zed::Os::Windows => {
-            let bytes = path_str.as_bytes();
-            if bytes.len() >= 3 {
-                if bytes[0].is_ascii_alphabetic()
-                    && bytes[1] == b':'
-                    && (bytes[2] == b'\\' || bytes[2] == b'/')
-                {
-                    return true;
-                }
-            }
-            path_str.starts_with(r"\\")
-        }
-        _ => path_str.starts_with('/'),
-    }
-}
-
 fn executable_name(binary: &str) -> String {
     match zed::current_platform() {
         (zed::Os::Windows, _) => format!("{binary}.exe"),
@@ -52,7 +30,6 @@ impl HackatimeExtension {
                 zed::Os::Mac => "apple-darwin",
                 zed::Os::Linux => "unknown-linux-gnu",
                 zed::Os::Windows => "pc-windows-msvc",
-                _ => return Err("unsupported platform".to_string()),
             };
 
             (arch, os)

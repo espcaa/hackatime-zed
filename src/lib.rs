@@ -109,7 +109,9 @@ impl HackatimeExtension {
         let binary_path = if binary == "wakatime-cli" {
             Path::new(&version_dir).join(executable_name(&target_triple))
         } else {
-            Path::new(&version_dir).join(executable_name(binary))
+            Path::new(&version_dir)
+                .join(&target_triple)
+                .join(executable_name(binary))
         };
 
         if !fs::metadata(&binary_path).is_ok_and(|stat| stat.is_file()) {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -178,7 +179,7 @@ func main() {
 	handler := protocol.Handler{
 		Initialize: func(ctx *glsp.Context, params *protocol.InitializeParams) (any, error) {
 			if params.RootURI != nil {
-				projectRoot = filepath.Clean(strings.TrimPrefix(*params.RootURI, "file://"))
+				projectRoot = cleanFileURI(*params.RootURI)
 				projectFolder = projectRoot
 			} else if params.RootPath != nil {
 				projectRoot = filepath.Clean(*params.RootPath)
@@ -192,7 +193,7 @@ func main() {
 		},
 
 		TextDocumentDidChange: func(ctx *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
-			uri := strings.TrimPrefix(params.TextDocument.URI, "file://")
+			uri := cleanFileURI(params.TextDocument.URI)
 
 			lines := 1
 			lineNumber := 1
@@ -236,7 +237,7 @@ func main() {
 		},
 
 		TextDocumentDidSave: func(ctx *glsp.Context, params *protocol.DidSaveTextDocumentParams) error {
-			uri := strings.TrimPrefix(params.TextDocument.URI, "file://")
+			uri := cleanFileURI(params.TextDocument.URI)
 
 			lines := 1
 			if params.Text != nil {
@@ -271,4 +272,12 @@ func buildPluginString() string {
 		version = "unknown"
 	}
 	return fmt.Sprintf("hackatime-zed-%s", version)
+}
+
+func cleanFileURI(uri string) string {
+	path := strings.TrimPrefix(uri, "file://")
+	if runtime.GOOS == "windows" && strings.HasPrefix(path, "/") {
+		path = path[1:]
+	}
+	return filepath.Clean(path)
 }

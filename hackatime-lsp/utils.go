@@ -23,13 +23,6 @@ func buildHeartbeatArgs(hb Heartbeat) []string {
 		args = append(args, "--category", hb.Category)
 	}
 
-	if hb.AILineChanges > 0 {
-		args = append(args, "--ai-line-changes", strconv.Itoa(hb.AILineChanges))
-	}
-	if hb.HumanLineChanges > 0 {
-		args = append(args, "--human-line-changes", strconv.Itoa(hb.HumanLineChanges))
-	}
-
 	if apiKey := getConfigValue("apiKey"); apiKey != "" {
 		args = append(args, "--key", quoteArg(apiKey))
 	}

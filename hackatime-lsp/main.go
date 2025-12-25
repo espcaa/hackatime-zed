@@ -70,7 +70,7 @@ func logEvent(eventType string, hb Heartbeat) {
 	defer logMutex.Unlock()
 
 	logPath := filepath.Join(os.Getenv("HOME"), "hackatime-zed.log")
-	
+
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return
@@ -200,20 +200,15 @@ func main() {
 			cursorPos := 0
 
 			if len(params.ContentChanges) > 0 {
-				if fullDoc, ok := params.ContentChanges[0].(map[string]any); ok {
-					if text, ok := fullDoc["text"].(string); ok {
-						lines = len(strings.Split(text, "\n"))
-					}
+				change := params.ContentChanges[0]
 
-					if rangeObj, ok := fullDoc["range"].(map[string]any); ok {
-						if startObj, ok := rangeObj["start"].(map[string]any); ok {
-							if line, ok := startObj["line"].(float64); ok {
-								lineNumber = int(line) + 1
-							}
-							if character, ok := startObj["character"].(float64); ok {
-								cursorPos = int(character)
-							}
-						}
+				if changeEvent, ok := change.(protocol.TextDocumentContentChangeEvent); ok {
+					if changeEvent.Range != nil {
+						lineNumber = int(changeEvent.Range.Start.Line) + 1
+						cursorPos = int(changeEvent.Range.Start.Character)
+					}
+					if changeEvent.Text != "" {
+						lines = len(strings.Split(changeEvent.Text, "\n"))
 					}
 				}
 			}
@@ -224,7 +219,7 @@ func main() {
 				Entity:     uri,
 				EntityType: "file",
 				Category:   "coding",
-				Plugin:     buildPluginString(),
+				Plugin:     "Zed",
 				Time:       float64(time.Now().UnixMilli()) / 1000.0,
 				LineNumber: lineNumber,
 				CursorPos:  cursorPos,
@@ -248,7 +243,7 @@ func main() {
 				Entity:     uri,
 				EntityType: "file",
 				Category:   "coding",
-				Plugin:     buildPluginString(),
+				Plugin:     "Zed",
 				Time:       float64(time.Now().UnixMilli()) / 1000.0,
 				LineNumber: 1,
 				Lines:      lines,
@@ -264,14 +259,6 @@ func main() {
 
 	s := server.NewServer(&handler, "hackatime-lsp", false)
 	s.RunStdio()
-}
-
-func buildPluginString() string {
-	version := os.Getenv("PLUGIN_VERSION")
-	if version == "" {
-		version = "unknown"
-	}
-	return fmt.Sprintf("hackatime-zed-%s", version)
 }
 
 func cleanFileURI(uri string) string {

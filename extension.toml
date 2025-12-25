@@ -1,6 +1,6 @@
 id = "hackatime-zed"
 name = "HackaTime for Zed"
-version = "0.0.4"
+version = "0.0.5"
 schema_version = 1
 authors = ["Alice <alice@hackclub.cc>"]
 description = "Hackatime support for Zed!"
